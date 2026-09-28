@@ -374,7 +374,7 @@
       <div class="compare-panel">
         <div class="compare-panel-header base">⚡ النموذج الأساسي (Llama 3.1 8B)</div>
         <div class="compare-msgs" id="msgsBase">
-          <div class="bubble bot">مرحباً! أنا نموذج Llama الأساسي بدون تدريب على بيانات RACA.</div>
+          <div class="bubble bot">مرحباً! أنا نموذج Llama 3.1 8B الأساسي من Hugging Face بدون تدريب على بيانات RACA.</div>
         </div>
       </div>
       <div class="compare-panel">
@@ -411,18 +411,14 @@
     <div class="settings-field">
       <label>المصدر</label>
       <select id="modeSelect">
-        <option value="groq">Groq (النموذج الأساسي)</option>
+        <!-- <option value="groq">Groq (النموذج الأساسي)</option> -->
         <option value="gpu">GPU الخاص بي (النموذج المُدرَّب)</option>
         <option value="compare">مقارنة: الأساسي vs المُدرَّب</option>
-        <option value="judge">⚖️ المحكّم: أفضل إجابة تلقائياً</option>
+        <!-- <option value="judge">⚖️ المحكّم: أفضل إجابة تلقائياً</option> -->
       </select>
     </div>
 
-    <div class="settings-field" id="groqField">
-      <label>مفتاح Groq API</label>
-      <input type="password" id="groqKey" placeholder="gsk_...">
-      <div class="settings-hint">من console.groq.com — يبقى في هذا المتصفح فقط.</div>
-    </div>
+    <!-- لم نعد بحاجة إلى مفتاح OpenRouter/Groq؛ النموذج الأساسي يُستدعى من Hugging Face عبر خادم الـ GPU نفسه. -->
 
     <div class="settings-field" id="gpuField" style="display:none;">
       <label>رابط ngrok الخاص بالـ GPU</label>
@@ -449,20 +445,16 @@
   const settingsCancel = document.getElementById('settingsCancel');
   const settingsSave = document.getElementById('settingsSave');
   const modeSelect = document.getElementById('modeSelect');
-  const groqField = document.getElementById('groqField');
   const gpuField = document.getElementById('gpuField');
-  const groqKeyInput = document.getElementById('groqKey');
   const gpuUrlInput = document.getElementById('gpuUrl');
 
   // In-memory connection state (no localStorage — kept only for this page load)
   // Default to your fine-tuned GPU model. Update GPU_URL each time your ngrok
   // tunnel restarts (its free-tier URL changes on every restart).
   const GPU_URL = 'https://void-self-luster.ngrok-free.dev';
-  let settings = { mode: 'judge', groqKey: '', gpuUrl: GPU_URL };
+  let settings = { mode: 'gpu', gpuUrl: GPU_URL };
   let histBase = [];
   let history = [];
-
-  const SYSTEM = 'أنت مساعد قانوني تابع لهيئة تنظيم الأنشطة الخيرية (RACA) في قطر. أجب بدقة وإيجاز باللغة العربية الفصحى حول أنظمة التسجيل والتراخيص والامتثال للجمعيات والمؤسسات الخيرية، بالاستناد إلى اللوائح المعمول بها. إذا لم تكن متأكدًا من إجابة دقيقة، وضّح ذلك واقترح التواصل مع الهيئة مباشرة.';
 
   function scrollToBottom(){
     messages.scrollTop = messages.scrollHeight;
@@ -489,12 +481,10 @@
   // ---- Settings panel ----
   function syncModeFields(){
     const mode = modeSelect.value;
-    groqField.style.display = (mode === 'groq' || mode === 'compare' || mode === 'judge') ? 'block' : 'none';
-    gpuField.style.display = (mode === 'gpu' || mode === 'compare' || mode === 'judge') ? 'block' : 'none';
+    gpuField.style.display = (mode === 'gpu' || mode === 'compare') ? 'block' : 'none';
   }
   settingsBtn.addEventListener('click', () => {
     modeSelect.value = settings.mode;
-    groqKeyInput.value = settings.groqKey;
     gpuUrlInput.value = settings.gpuUrl;
     syncModeFields();
     settingsOverlay.classList.add('open');
@@ -509,10 +499,6 @@
     if(settings.mode === 'compare'){
       chatPanel.classList.add('compare-mode');
       judgePanel.style.display = 'none';
-    } else if(settings.mode === 'judge'){
-      chatPanel.classList.remove('compare-mode');
-      judgePanel.style.display = 'flex';
-      document.querySelector('.messages').style.display = 'none';
     } else {
       chatPanel.classList.remove('compare-mode');
       judgePanel.style.display = 'none';
@@ -522,24 +508,25 @@
 
   settingsSave.addEventListener('click', () => {
     settings.mode = modeSelect.value;
-    settings.groqKey = groqKeyInput.value.trim();
     settings.gpuUrl = gpuUrlInput.value.trim().replace(/\/$/, '');
     settingsOverlay.classList.remove('open');
     applyCompareMode();
   });
 
   // ---- Model calls ----
-  async function callGroq(text, useHistBase=false){
-    const hist = useHistBase ? histBase : history;
-    const msgs = [{ role: 'system', content: SYSTEM }, ...hist, { role: 'user', content: text }];
-    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${settings.groqKey}` },
-    body: JSON.stringify({ model: 'meta-llama/llama-3.1-8b-instruct', messages: msgs, max_tokens: 600, temperature: 0.1 })
+  // Both models are served by the same FastAPI/ngrok backend:
+  //   /ask/base  -> base Llama 3.1 8B loaded directly from Hugging Face
+  //   /ask       -> your fine-tuned RACA model
+  async function callBase(text){
+    const res = await fetch(`${settings.gpuUrl}/ask/base`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
+      body: JSON.stringify({ question: text, history: histBase })
     });
     const data = await res.json();
-    if(data.error) throw new Error(data.error.message);
-    return data.choices[0].message.content;
+    if(!res.ok) throw new Error(data.detail || 'تعذر استدعاء النموذج الأساسي.');
+    if(!data.answer) throw new Error('لم يُرجع النموذج الأساسي إجابة صالحة.');
+    return data.answer;
   }
 
   async function callGpu(text){
@@ -549,70 +536,14 @@
       body: JSON.stringify({ question: text, history: history })
     });
     const data = await res.json();
+    if(!res.ok) throw new Error(data.detail || 'تعذر استدعاء النموذج المُدرَّب.');
     if(!data.answer) throw new Error('لم يُرجع الخادم إجابة صالحة.');
     return data.answer;
   }
 
-  async function callJudge(text){
-    const res = await fetch(`${settings.gpuUrl}/ask/judge`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
-      body: JSON.stringify({
-        question: text,
-        history: history,
-        openrouter_key: settings.groqKey,
-        use_rag: true
-      })
-    });
-    const data = await res.json();
-    return data;
-  }
-
-  async function addJudgeResult(data, question){
-    const container = document.getElementById('judgeMsgs');
-
-    // Question row
-    const qDiv = document.createElement('div');
-    qDiv.className = 'bubble user';
-    qDiv.style.alignSelf = 'flex-end';
-    qDiv.textContent = question;
-    container.appendChild(qDiv);
-
-    // Winner box
-    const winnerDiv = document.createElement('div');
-    winnerDiv.className = 'judge-winner';
-    winnerDiv.innerHTML = `
-      <div class="judge-winner-label">🏆 الإجابة الأفضل — ${data.winner_label}</div>
-      <div style="font-size:13.5px;line-height:1.65">${data.winner === 'finetuned' ? data.finetuned_answer : data.base_answer}</div>
-      <div class="judge-reasoning">💬 ${data.judge_reasoning}</div>
-    `;
-    container.appendChild(winnerDiv);
-
-    // Both answers side by side
-    const bothDiv = document.createElement('div');
-    bothDiv.className = 'judge-both';
-    bothDiv.innerHTML = `
-      <div class="judge-col">
-        <div class="judge-col-label" style="color:#856404">⚡ النموذج الأساسي</div>
-        <div class="bubble bot" style="max-width:100%">${data.base_answer}</div>
-      </div>
-      <div class="judge-col">
-        <div class="judge-col-label" style="color:#1b5e20">🎯 النموذج المُدرَّب</div>
-        <div class="bubble bot" style="max-width:100%">${data.finetuned_answer}</div>
-      </div>
-    `;
-    container.appendChild(bothDiv);
-    container.scrollTop = container.scrollHeight;
-  }
-
   async function getAnswer(text){
-    if(settings.mode === 'groq'){
-      if(!settings.groqKey) throw new Error('الرجاء إدخال مفتاح Groq API من الإعدادات أعلاه.');
-      return callGroq(text);
-    } else {
-      if(!settings.gpuUrl) throw new Error('الرجاء إدخال رابط ngrok الخاص بالـ GPU من الإعدادات أعلاه.');
-      return callGpu(text);
-    }
+    if(!settings.gpuUrl) throw new Error('الرجاء إدخال رابط ngrok الخاص بالـ GPU من الإعدادات أعلاه.');
+    return callGpu(text);
   }
 
   async function addCompareBubble(containerId, text, who){
@@ -636,51 +567,46 @@
     const typingEl = addTyping();
 
     try {
-      if(settings.mode === 'judge'){
-        if(!settings.groqKey) throw new Error('الرجاء إدخال مفتاح OpenRouter من الإعدادات.');
-        if(!settings.gpuUrl) throw new Error('الرجاء إدخال رابط ngrok من الإعدادات.');
-        // Show loading in judge panel
-        const judgeContainer = document.getElementById('judgeMsgs');
-        const loadingDiv = document.createElement('div');
-        loadingDiv.className = 'bubble bot typing';
-        loadingDiv.innerHTML = '<span></span><span></span><span></span>';
-        judgeContainer.appendChild(loadingDiv);
-        judgeContainer.scrollTop = judgeContainer.scrollHeight;
-        typingEl.remove();
-        const data = await callJudge(text);
-        loadingDiv.remove();
-        await addJudgeResult(data, text);
-        history.push({role:'user',content:text},{role:'assistant',content:data.winner === 'finetuned' ? data.finetuned_answer : data.base_answer});
-        if(history.length > 12) history = history.slice(-12);
-      } else if(settings.mode === 'compare'){
-        // Compare mode — call both in parallel
-        if(!settings.groqKey) throw new Error('الرجاء إدخال مفتاح Groq API من الإعدادات.');
+      if(settings.mode === 'compare'){
         if(!settings.gpuUrl) throw new Error('الرجاء إدخال رابط ngrok من الإعدادات.');
         addCompareBubble('msgsBase', text, 'user');
         addCompareBubble('msgsTuned', text, 'user');
-        // Also show in main chat
         addBubble(text, 'user');
-        const thinkBase = await addCompareBubble('msgsBase', '...', 'bot typing');
-        const thinkTuned = await addCompareBubble('msgsTuned', '...', 'bot typing');
+        await addCompareBubble('msgsBase', '...', 'bot typing');
+        await addCompareBubble('msgsTuned', '...', 'bot typing');
         typingEl.remove();
-        const [baseRes, tunedRes] = await Promise.allSettled([callGroq(text), callGpu(text)]);
+
+        // Run sequentially to avoid two large models generating on the GPU at the same time.
+        let baseAns;
+        let tunedAns;
+        try {
+          baseAns = await callBase(text);
+        } catch(e) {
+          baseAns = 'خطأ: ' + e.message;
+        }
         document.getElementById('msgsBase').removeChild(document.getElementById('msgsBase').lastChild);
-        document.getElementById('msgsTuned').removeChild(document.getElementById('msgsTuned').lastChild);
-        const baseAns = baseRes.status === 'fulfilled' ? baseRes.value : 'خطأ: ' + baseRes.reason;
-        const tunedAns = tunedRes.status === 'fulfilled' ? tunedRes.value : 'خطأ: ' + tunedRes.reason;
         addCompareBubble('msgsBase', baseAns, 'bot');
+
+        try {
+          tunedAns = await callGpu(text);
+        } catch(e) {
+          tunedAns = 'خطأ: ' + e.message;
+        }
+        document.getElementById('msgsTuned').removeChild(document.getElementById('msgsTuned').lastChild);
         addCompareBubble('msgsTuned', tunedAns, 'bot');
+
         histBase.push({role:'user',content:text},{role:'assistant',content:baseAns});
         history.push({role:'user',content:text},{role:'assistant',content:tunedAns});
         if(histBase.length > 12) histBase = histBase.slice(-12);
+        if(history.length > 12) history = history.slice(-12);
       } else {
-      const answer = await getAnswer(text);
-      typingEl.remove();
-      addBubble(answer, 'bot');
-      history.push({ role: 'user', content: text });
-      history.push({ role: 'assistant', content: answer });
-      if(history.length > 12) history = history.slice(-12);
-      } // end compare else
+        const answer = await getAnswer(text);
+        typingEl.remove();
+        addBubble(answer, 'bot');
+        history.push({ role: 'user', content: text });
+        history.push({ role: 'assistant', content: answer });
+        if(history.length > 12) history = history.slice(-12);
+      }
     } catch(err){
       typingEl.remove();
       addBubble('حدث خطأ: ' + err.message, 'error');
